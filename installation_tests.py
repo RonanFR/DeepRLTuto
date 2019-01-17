@@ -2,7 +2,7 @@ import numpy as np
 import gym
 import torch
 import cv2 as cv
-import ptan
+# import ptan
 import time
 
 
