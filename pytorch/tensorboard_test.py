@@ -6,8 +6,7 @@ print(sys.executable)
 
 writer = SummaryWriter('runs')
 
-# funcs = {"sin":m.sin, "cos":m.cos, "tan":m.tan}
-funcs = {"sin":m.sin}
+funcs = {"sin":m.sin, "cos":m.cos, "tan":m.tan}
 
 for angle in range(0, 360):
     angle_rad = angle * m.pi/180
