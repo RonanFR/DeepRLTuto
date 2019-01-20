@@ -3,7 +3,7 @@ import torch.nn as nn
 
 
 # Losses are implemented as an nn.Module subclass. They take as input the output from the network (prediction) and the
-# desired output (data) an,d return a real.
+# desired output (data) and return a real.
 # Examples: nn.MSELoss, nn.BCEWithLogits, nn.CrossEntropyLoss, etc.
 
 loss1 = nn.MSELoss()
