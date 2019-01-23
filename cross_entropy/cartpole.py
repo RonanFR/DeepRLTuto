@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from collections import namedtuple
 from tensorboardX import SummaryWriter
+import shutil
 
 
 # Constants (parameters) of the algo
@@ -47,7 +48,7 @@ def iterate_batches(env, net, batch_size):
             episode_reward = 0.
             episode_steps = []
             next_obs = env.reset()
-            if len(batch) == BATCH_SIZE:
+            if len(batch) == batch_size:
                 yield batch
                 batch = []
         obs = next_obs
@@ -73,7 +74,11 @@ if __name__ == '__main__':
     net = Net(env.observation_space.shape[0], HIDDEN_SIZE, env.action_space.n)
     loss = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(params = net.parameters(), lr = 0.01)
-    writer = SummaryWriter()
+    try:
+        shutil.rmtree('runs')
+        writer = SummaryWriter('runs')
+    except:
+        writer = SummaryWriter('runs')
     for iter_nb, batch  in enumerate(iterate_batches(env, net, BATCH_SIZE)):
         train_obs_v, train_act_v, reward_bound, reward_mean = filter_batch(batch, PERCENTILE)
         optimizer.zero_grad()
