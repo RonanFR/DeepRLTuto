@@ -27,4 +27,4 @@ class DQN(nn.Module):
 
     def forward(self, x):
         conv_out = self.conv(x).view(x.size()[0],-1)
-        return self.fc()
+        return self.fc(conv_out)
