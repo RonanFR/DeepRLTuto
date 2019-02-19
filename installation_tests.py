@@ -4,6 +4,7 @@ import torch
 import cv2 as cv
 # import ptan
 import time
+from tensorboardX import SummaryWriter
 
 
 # Main packages/libraries to install (using pip, conda or pip in conda):
@@ -18,7 +19,7 @@ dtype = np.float32
 env = gym.make('CartPole-v0')
 env.reset()
 for _ in range(100):
-    env.render()
+    # env.render()
     time.sleep(0.01)
     env.step(env.action_space.sample()) # take a random action
 env.close()
@@ -32,3 +33,7 @@ print(torch.cuda.is_available())
 img = cv.imread('pictures/img1.jpg')
 px = img[1,1]
 print( px )
+
+# TensorboardX
+writer = SummaryWriter('test_summaryWriter')
+writer.close()

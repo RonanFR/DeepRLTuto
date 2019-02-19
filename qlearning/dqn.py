@@ -87,16 +87,21 @@ class Agent:
         done_mask = torch.ByteTensor(dones).to(device)
         state_action_values = net(states_v).gather(1, actions_v.unsqueeze(-1)).squeeze(-1)
         next_state_values = tgt_net(next_states_v).max(1)[0]
-        next_state_values[done_mask] = 0.0 # Very important for convergence (last state of an episode)
+        next_state_values[done_mask] = 0.0  # Very important for convergence (last state of an episode)
         next_state_values = next_state_values.detach()
         expected_state_action_values = next_state_values * GAMMA + rewards_v
         return nn.MSELoss()(state_action_values, expected_state_action_values)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--cuda", default=False, action="store_true", help="Enable cuda")
+    parser.add_argument("--cuda", default=True, action="store_true", help="Enable cuda")
     parser.add_argument("--env", default=DEFAULT_ENV_NAME, help="Name of the environment, default="+DEFAULT_ENV_NAME)
     parser.add_argument("--reward", type=float, default=MEAN_REWARD_BOUND, help="Mean reward boundary for stop of training, default=%.2f" %MEAN_REWARD_BOUND)
+    parser.add_argument("--epsd", type=float, default=EPSILON_DECAY_LAST_FRAME,
+                        help="Epsilon decay, default=%.2f" % EPSILON_DECAY_LAST_FRAME)
+    parser.add_argument("--lr", type=float, default=LEARNING_RATE,
+                        help="Learning rate, default=%.2f" % LEARNING_RATE)
+    parser.add_argument('--other', default='', type=str, help='Extra infos like job and/or task ID')
     args = parser.parse_args()
     device = torch.device("cuda" if args.cuda else "cpu")
 
@@ -105,16 +110,19 @@ if __name__ == "__main__":
     tgt_net = dqn_model.DQN(env.observation_space.shape, env.action_space.n).to(device)
 
     try:
-        shutil.rmtree('runs_dqn')
-        writer = SummaryWriter('runs_dqn', comment='-'+args.env)
+        shutil.rmtree('runs_dqn' + '-' + args.env + '-' + args.other)
+        writer = SummaryWriter('runs_dqn' + '-' + args.env + '-' + args.other)
+        # shutil.rmtree('runs_dqn'+'-'+args.env+'-'+str(args.epsd)+'-'+str(args.lr)+'-'+args.other)
+        # writer = SummaryWriter('runs_dqn'+'-'+args.env+'-'+str(args.epsd)+'-'+str(args.lr)+'-'+args.other)
     except:
-        writer = SummaryWriter('runs_dqn', comment='-'+args.env)
+        writer = SummaryWriter('runs_dqn' + '-' + args.env + '-' + args.other)
+        # writer = SummaryWriter('runs_dqn'+'-'+args.env+'-'+str(args.epsd)+'-'+str(args.lr)+'-'+args.other)
 
     buffer = ExperienceBuffer(REPLAY_SIZE)
     agent = Agent(env, buffer)
     epsilon = EPSILON_START
 
-    optimizer = optim.Adam(net.parameters(), lr=LEARNING_RATE)
+    optimizer = optim.Adam(net.parameters(), lr=args.lr)
     total_rewards = []
     frame_idx = 0
     ts_frame = 0
@@ -123,7 +131,7 @@ if __name__ == "__main__":
 
     while True:
         frame_idx += 1
-        epsilon = max(EPSILON_FINAL, EPSILON_START - frame_idx/EPSILON_DECAY_LAST_FRAME)
+        epsilon = max(EPSILON_FINAL, EPSILON_START - frame_idx/args.epsd)
         reward = agent.play_step(net, epsilon, device)
         if reward is not None:
             total_rewards.append(reward)

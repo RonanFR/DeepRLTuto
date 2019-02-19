@@ -79,7 +79,7 @@ if __name__ == '__main__':
         writer = SummaryWriter('runs')
     except:
         writer = SummaryWriter('runs')
-    for iter_nb, batch  in enumerate(iterate_batches(env, net, BATCH_SIZE)):
+    for iter_nb, batch in enumerate(iterate_batches(env, net, BATCH_SIZE)):
         train_obs_v, train_act_v, reward_bound, reward_mean = filter_batch(batch, PERCENTILE)
         optimizer.zero_grad()
         action_scores_v = net(train_obs_v)
