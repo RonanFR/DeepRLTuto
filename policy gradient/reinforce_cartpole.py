@@ -5,13 +5,14 @@ import ptan
 from tensorboardX import SummaryWriter
 import shutil
 from torch import optim
-from torch import tensor
 from torch import nn
 
 
 GAMMA = 0.99
-LEARNING_RATE = 0.01
-EPISODES_TO_TRAIN = 4
+LEARNING_RATE = 0.001
+ENTROPY_BETA = 0.01
+BATCH_SIZE = 8
+REWARD_STEPS = 10
 
 class PGN(nn.Module):  # Policy network
     def __init__(self, input_size, nb_actions):
@@ -48,27 +49,27 @@ if __name__=="__main__":
 
     agent = ptan.agent.PolicyAgent(net, preprocessor=ptan.agent.float32_preprocessor, apply_softmax=True)
 
-    exp_source = ptan.experience.ExperienceSourceFirstLast(env, agent, gamma=GAMMA)
+    exp_source = ptan.experience.ExperienceSourceFirstLast(env, agent, gamma=GAMMA, steps_count=REWARD_STEPS)
 
     optimizer = optim.Adam(params=net.parameters(), lr=LEARNING_RATE)
 
     total_rewards = []
     done_episodes = 0
 
-    batch_episodes = 0
-    cur_rewards = []
     batch_states, batch_actions, batch_qvals = [], [], []
 
+    reward_sum = 0.0
+    batch_scales = []
+
     for i, exp in enumerate(exp_source):
+        reward_sum += exp.reward
+        baseline = reward_sum/(i+1)
+        writer.add_scalar('baseline', baseline, i)
         batch_states.append(exp.state)
         batch_actions.append(int(exp.action))
-        cur_rewards.append(exp.reward)
+        batch_scales.append(exp.reward - baseline)
 
-        if exp.last_state is None:
-            batch_qvals.extend(calc_qvals(cur_rewards))
-            cur_rewards.clear()
-            batch_episodes += 1
-
+        # handle new rewards
         new_rewards = exp_source.pop_total_rewards()
         if new_rewards:
             done_episodes += 1
@@ -83,26 +84,42 @@ if __name__=="__main__":
                 print("Solved in %d steps and %d episodes!!!" % (i, done_episodes))
                 break
 
-        if batch_episodes < EPISODES_TO_TRAIN:
+        if len(batch_states) < BATCH_SIZE:
             continue
 
         optimizer.zero_grad()
         states_v = torch.FloatTensor(batch_states)
         batch_actions_t = torch.LongTensor(batch_actions)
-        batch_qvals_v = torch.FloatTensor(batch_qvals)
+        batch_scale_v = torch.FloatTensor(batch_scales)
 
         logits_v = net(states_v)
         log_prob_v = nn.functional.log_softmax(logits_v, dim=1)
-        log_prob_actions_v = batch_qvals_v * log_prob_v[range(len(batch_states)), batch_actions_t]
-        loss_v = -log_prob_actions_v.mean()
+        log_prob_actions_v = batch_scale_v * log_prob_v[range(len(batch_states)), batch_actions_t]
+        loss_policy_v = -log_prob_actions_v.mean()
+
+        prob_v = nn.functional.softmax(logits_v, dim=1)
+        entropy_v = -(prob_v * log_prob_v).sum(dim=1).mean()
+        entropy_loss_v = -ENTROPY_BETA * entropy_v
+
+        loss_v = loss_policy_v + entropy_loss_v
 
         loss_v.backward()
         optimizer.step()
 
-        batch_episodes = 0
+        # compute KL-div to monitor learning process
+        new_logits_v = net(states_v)
+        new_prob_v = nn.functional.softmax(new_logits_v, dim=1)
+        kl_div_v = -((new_prob_v / prob_v).log() * prob_v).sum(dim=1).mean()
+        writer.add_scalar('KL', kl_div_v.item(), i)
+
+        writer.add_scalar("entropy", entropy_v.item(), i)
+        writer.add_scalar("loss_entropy", entropy_loss_v.item(), i)
+        writer.add_scalar("loss_policy", loss_policy_v.item(), i)
+        writer.add_scalar("loss_total", loss_v.item(), i)
+
         batch_states.clear()
         batch_actions.clear()
-        batch_qvals.clear()
+        batch_scales.clear()
 
     writer.close()
 

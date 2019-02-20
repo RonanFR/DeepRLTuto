@@ -35,7 +35,9 @@ def calc_qvals(rewards):
         res.append(sum_r)
     return list(reversed(res))
 
+
 Experience = collections.namedtuple('Experience', field_names=['state', 'action', 'reward', 'next_state', 'done'])
+
 
 def iterate_experience(net, env):
     state = env.reset()
