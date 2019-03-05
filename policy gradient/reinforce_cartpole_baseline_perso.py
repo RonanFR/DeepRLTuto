@@ -13,6 +13,7 @@ This is a personal implementation of REINFORCE for CartPole not using the PTAN l
 algorithm: how data are processed, how the policy is learned, influence of parameters, getting used to debugging, etc.
 """
 
+# Global variables
 ENV = "CartPole-v0"
 HIDDEN_LAYERS = 128
 BELLMAN_HORIZON = 10  # BELLMAN_HORIZON = 200 corresponds to the full horizon
@@ -20,6 +21,9 @@ BATCH_SIZE = 4
 LEARNING_RATE = 0.001
 ENTROPY_REG = 0.01
 GAMMA = 0.99
+nb_episodes = 0
+nb_samples = 0
+total_rewards = []
 
 
 # Define neural network
@@ -36,11 +40,7 @@ class policy_nn_single_layer(nn.Module):
         return self.net(x)
 
 
-# Global variables
 batch_experience = collections.namedtuple('Batch_experience', field_names=['states', 'actions', 'rewards'])
-nb_episodes = 0
-nb_samples = 0
-total_rewards = []
 
 
 def compute_qval(rewards, gamma):
@@ -129,7 +129,7 @@ if __name__ == "__main__":
         batch_actions_t = torch.LongTensor(batch_exp.actions)
         batch_rewards_t = torch.FloatTensor(batch_exp.rewards)
 
-        optimizer.zero_grad()  # very important (defines from where to start the graph for computing the gradient)
+        optimizer.zero_grad()  # very important
         log_probas_actions_t = nn.functional.log_softmax(net(batch_states_t), dim=1)
         log_actions_t = log_probas_actions_t[range(len(batch_exp.actions)), batch_actions_t]
         losses = - batch_rewards_t * log_actions_t
