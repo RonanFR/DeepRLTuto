@@ -17,12 +17,12 @@ Experiments: the code seems to work, convergence is achieved in a reasonable amo
 
 # Global variables
 LEARNING_RATE = 0.001
-NB_ENVS = 3
-BATCH_SIZE = 4
-BELLMAN_HORIZON = 10
+NB_ENVS = 4
+BATCH_SIZE = 4  # number of rollouts per batch
+ROLLOUT_HORIZON = 10  # length of rollouts
 REWARD_THRESHOLD = 195
 GAMMA = 0.99
-ENTROPY_REG = 0.0
+ENTROPY_REG = 0.01
 
 
 class CartPoleA2C(nn.Module):
@@ -45,7 +45,8 @@ class CartPoleA2C(nn.Module):
         return self.policy_net(x), self.value_net(x)
 
 
-Batch = collections.namedtuple('Batch', field_names=['states_batch', 'actions_batch', 'qvals_batch'])
+Batch = collections.namedtuple('Batch', field_names=['states_batch', 'actions_batch', 'qvals_batch',
+                                                     'nb_samples_batch', 'nb_rollouts'])
 
 
 class Agent:
@@ -54,7 +55,8 @@ class Agent:
         self.policy_net = policy_net
         self.value_net = value_net
 
-    def compute_qval(self, rewards, last_state, done):
+    def compute_qval(self, rewards, last_state, done):  # computes empirical Q-values of a sequence of rewards
+        qvals = []
         if done:
             qval = 0.  # if the episode is done, set the value function to 0 (very important!)
         else:
@@ -63,24 +65,25 @@ class Agent:
         for r in reversed(rewards):
             qval *= self.gamma
             qval += r
+            qvals.append(qval)
 
-        return qval
+        return list(reversed(qvals))
 
-    def iterate_batches(self, envs, tracker, max_batch_size=1, bellman_horizon=1, device=torch.device('cpu')):
+    def iterate_batches(self, envs, tracker, max_batch_size=1, rollout_horizon=1, device=torch.device('cpu')):
         nb_actions = envs[0].action_space.n
         nb_envs = len(envs)
 
         # Counters
-        steps = 0  # counts the total number of calls to env.step()
+        calls_env = 0  # counts the total number of calls to env.step()
         episodes = 0  # counts the number of episodes
-        batch_size = 0  # counts number of samples in batch
+        nb_rollouts_batch = 0  # counts number of rollouts in batch
 
         # Batch samples
         states_batch = []
         actions_batch = []
         qvals_batch = []
 
-        current_states = [env.reset() for env in envs]  # current states of all environments
+        current_states_envs = [env.reset() for env in envs]  # current states of all environments
         reward_episode_envs = [0. for _ in
                                range(nb_envs)]  # keeps track of cumulative reward of episode in all environments
 
@@ -88,14 +91,14 @@ class Agent:
 
         task_solved = False
 
-        while True:  # Loop while task ot solved
-            states = []
-            actions = []
-            rewards = []
-            state = current_states[env_id]
-            nb_experiences = 1
+        while True:  # Loop over rollouts while task not solved
+            states_rollout = []
+            actions_rollout = []
+            rewards_rollout = []
+            state = current_states_envs[env_id]
+            nb_samples_batch = 0  # number of calls to env.step() in batch
             env = envs[env_id]
-            for horizon in range(bellman_horizon):
+            for rollout_step in range(rollout_horizon):  # for every rollout, loop over steps
                 # Compute action probabilities
                 logit_action = self.policy_net(torch.FloatTensor([state]).to(device))
                 actions_proba = nn.functional.softmax(logit_action, dim=1).data.numpy()[0]
@@ -103,48 +106,45 @@ class Agent:
                 # Sample action, execute action and obtain new sample from the environment
                 action = np.random.choice(nb_actions, p=actions_proba)
                 next_state, reward, done, _ = env.step(action)
-                states.append(state)
-                actions.append(action)
-                rewards.append(reward)
+                states_rollout.append(state)
+                actions_rollout.append(action)
+                rewards_rollout.append(reward)
                 reward_episode_envs[env_id] += reward
-                steps += 1  # update number of steps
+                calls_env += 1  # update number of calls to ebv.step()
+                nb_samples_batch += 1
                 state = next_state  # update current state
 
                 if done:  # Check if episode has ended
                     state = env.reset()
                     episodes += 1  # update number of episodes
-                    task_solved = tracker.check_reward(reward_episode_envs[env_id], steps)
-                    reward_episode_envs[env_id] = 0.  # reset cumulative reward of environment
-                    nb_experiences = horizon + 1
+                    task_solved = tracker.check_reward(reward_episode_envs[env_id], calls_env)
+                    reward_episode_envs[env_id] = 0.  # reset cumulative reward of episode for this environment
                     break
 
             if task_solved:  # if task is solved, stop!
                 break
 
-            # Update batch with new sample(s):
-            #   1) if episode is not over, just use one experience (too much bias otherwise)
-            #   2) automatically generate "fake" experiences with tail of batch samples when episode is over (better
-            #      sample efficiency)
-            for i in range(nb_experiences):
-                states_batch.append(states[i])
-                actions_batch.append(actions[i])
-                qvals_batch.append(self.compute_qval(rewards[i:], next_state, done))
-                batch_size += 1  # update number of samples in batch
+            # Update batch with new rollout(s):
+            states_batch.append(states_rollout)
+            actions_batch.append(actions_rollout)
+            qvals_batch.append(self.compute_qval(rewards_rollout, next_state, done))
+            nb_rollouts_batch += 1  # update number of samples in batch
 
-            current_states[env_id] = state
+            current_states_envs[env_id] = state  # update current state of environment
 
             # Update environment id
             env_id += 1
             env_id %= nb_envs
 
-            if batch_size < max_batch_size:  # Check if maximum batch size has been reached, if not continue
+            if nb_rollouts_batch < max_batch_size:  # Check if maximum batch size has been reached, if not continue
                 continue
 
             yield Batch(states_batch=states_batch, actions_batch=actions_batch,
-                        qvals_batch=qvals_batch)  # otherwise return batch data
+                        qvals_batch=qvals_batch, nb_samples_batch=nb_samples_batch,
+                        nb_rollouts=nb_rollouts_batch)  # otherwise return batch data
 
             # Clear all batch samples
-            batch_size = 0
+            nb_rollouts_batch = 0
             states_batch.clear()
             actions_batch.clear()
             qvals_batch.clear()
@@ -183,6 +183,43 @@ class Tracker:  # Tracks all values of interest and check termination, to be use
         self.writer.add_scalar(name, value, step)
 
 
+def compute_loss(states_batch, actions_batch, qvals_batch, net):
+    loss_policy = 0.
+    loss_value = 0.
+
+    test =list(zip(states_batch, actions_batch, qvals_batch))
+
+    for (states_rollout, actions_rollout, qvals_rollout) in zip(states_batch, actions_batch, qvals_batch):
+        len_rollout = len(states_rollout)
+
+        # Convert to pytorch tensor
+        states_rollout, actions_rollout, qvals_rollout = torch.FloatTensor(states_rollout),\
+                                                         torch.LongTensor(actions_rollout),\
+                                                         torch.FloatTensor(qvals_rollout)
+
+        policy_logits, values = net(states_rollout)  # predictions from network
+
+        discounts = torch.FloatTensor([GAMMA ** i for i in range(len_rollout)])
+
+        # Loss of the policy (policy gradient theorem)
+        log_proba_actions = nn.functional.log_softmax(policy_logits, dim=1)
+        log_policy = log_proba_actions[range(len_rollout), actions_rollout]
+        cum_log_proba_actions = (log_policy * discounts).cumsum(dim=0)  # "Double some" of policy gradient handled correctly!
+
+        adv_log_policy = -(qvals_rollout - values.detach()) * cum_log_proba_actions  # Don't forget to detach fixed tensors
+        loss_policy += adv_log_policy.mean()
+
+        # Loss of the value function
+        loss_value += nn.functional.mse_loss(qvals_rollout, values)
+
+        # Entropy regularization (N.B: we want to max entropy but min loss)
+        proba_actions = nn.functional.softmax(policy_logits, dim=1)
+        entropy_loss = ENTROPY_REG * (proba_actions * log_proba_actions).sum(dim=1).mean()
+        
+    return loss_policy + loss_value + entropy_loss  # Sum all losses and update gradient
+
+
+
 if __name__=='__main__':
     # Arguments
     parser = argparse.ArgumentParser()
@@ -196,6 +233,10 @@ if __name__=='__main__':
     # Create policy and value network
     net = CartPoleA2C(envs[0].observation_space.shape[0], envs[0].action_space.n).to(device)
 
+    # print(len(list(net.parameters())))  # Number of layers
+    # print(sum(p.numel() for p in net.parameters()))  # Number of parameters
+    # print(sum(p.numel() for p in net.parameters() if p.requires_grad))  # Number of parameters
+
     agent = Agent(lambda x: net(x)[0], lambda x: net(x)[1], GAMMA)  # agent
 
     optimizer = optim.Adam(params=net.parameters(), lr=LEARNING_RATE)
@@ -204,31 +245,25 @@ if __name__=='__main__':
 
     with Tracker(tx_folder_name, REWARD_THRESHOLD) as tracker:
         for i, batch in enumerate(agent.iterate_batches(envs, tracker, max_batch_size=BATCH_SIZE,
-                                                        bellman_horizon=BELLMAN_HORIZON, device=device)):
-            # Gather batch samples
-            batch_size = len(batch.qvals_batch)
-            states_batch_t = torch.FloatTensor(batch.states_batch)
-            actions_batch_t = torch.LongTensor(batch.actions_batch)
-            qvals_batch_t = torch.FloatTensor(batch.qvals_batch)
+                                                        rollout_horizon=ROLLOUT_HORIZON, device=device)):
+            # # Gather batch samples
+            # states_batch_t = torch.FloatTensor(batch.states_batch)
+            # actions_batch_t = torch.LongTensor(batch.actions_batch)
+            # qvals_batch_t = torch.FloatTensor(batch.qvals_batch)
 
-            optimizer.zero_grad()  # computation graph starts here! Don't forget to detach fixed tensors
+            optimizer.zero_grad()  # Don't forget to zero the gradients!
 
-            policy_logits, values = net(states_batch_t)  # predictions from network
+            # policy_logits, values = net(states_batch_t)  # predictions from network
+            #
+            # # Loss of the policy (policy gradient theorem): does not account for the "double sum"
+            # log_proba_actions = nn.functional.log_softmax(policy_logits, dim=1)
+            # adv_log_pol = - (qvals_batch_t - values.detach()) * log_proba_actions[range(batch.batch_size), actions_batch_t]  # Don't forget to detach fixed tensors
+            # loss_policy = adv_log_pol.mean()
+            #
+            # # Loss of the value function
+            # loss_value = nn.functional.mse_loss(qvals_batch_t, values)
 
-            # Loss of the policy (policy gradient theorem)
-            log_proba_actions = nn.functional.log_softmax(policy_logits, dim=1)
-            adv_log_pol = - (qvals_batch_t - values.detach()) * log_proba_actions[range(batch_size), actions_batch_t]
-            loss_policy = adv_log_pol.mean()
-
-            # Loss of the value function
-            loss_value = nn.functional.mse_loss(qvals_batch_t, values)
-
-            # Entropy regularization (N.B: we want to max entropy but min loss)
-            proba_actions = nn.functional.softmax(policy_logits, dim=1)
-            entropy_loss = ENTROPY_REG * (proba_actions * log_proba_actions).sum(dim=1).mean()
-
-            # Sum all losses and update gradient
-            loss = loss_value + loss_policy + entropy_loss
+            loss = compute_loss(batch.states_batch, batch.actions_batch, batch.qvals_batch, net)
             loss.backward()
             optimizer.step()
 
